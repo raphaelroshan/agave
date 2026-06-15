@@ -591,7 +591,7 @@ impl Tvu {
             cluster_info.clone(),
             poh_recorder.clone(),
             tower_storage,
-            vote_connection_cache.clone(),
+            vote_connection_cache.clone() as Arc<dyn crate::voting_service::VoteTransport>,
         );
 
         let bls_voting_service = BLSVotingService::new(

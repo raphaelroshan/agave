@@ -10,6 +10,7 @@ use {
         },
         replay_stage::ReplayStage,
         vote_simulator::{self, VoteSimulator},
+        voting_service::NoopVoteTransport,
     },
     agave_votor_messages::{
         certificate::{Certificate, CertificateType},
@@ -24,7 +25,6 @@ use {
     solana_account::{ReadableAccount, state_traits::StateMut},
     solana_accounts_db::accounts_db::{ACCOUNTS_DB_CONFIG_FOR_TESTING, AccountsDbConfig},
     solana_bls_signatures::{BLS_SIGNATURE_AFFINE_SIZE, Signature as BLSSignature},
-    solana_client::connection_cache::ConnectionCache,
     solana_entry::{
         block_component::{
             BlockComponent, BlockFooterV1, BlockHeaderV1, UpdateParentV1, VersionedBlockMarker,
@@ -65,7 +65,6 @@ use {
     solana_sha256_hasher::hash,
     solana_signature::Signature,
     solana_system_transaction as system_transaction,
-    solana_tpu_client::tpu_client::{DEFAULT_TPU_CONNECTION_POOL_SIZE, DEFAULT_VOTE_USE_QUIC},
     solana_transaction_error::TransactionError,
     solana_transaction_status::VersionedTransactionWithStatusMeta,
     solana_unified_scheduler_pool::DefaultSchedulerPool,
@@ -4614,24 +4613,12 @@ fn test_replay_stage_refresh_last_vote() {
         .recv_timeout(Duration::from_secs(1))
         .unwrap();
 
-    let connection_cache = if DEFAULT_VOTE_USE_QUIC {
-        ConnectionCache::new_quic_for_tests(
-            "connection_cache_vote_quic",
-            DEFAULT_TPU_CONNECTION_POOL_SIZE,
-        )
-    } else {
-        ConnectionCache::with_udp(
-            "connection_cache_vote_udp",
-            DEFAULT_TPU_CONNECTION_POOL_SIZE,
-        )
-    };
-
     crate::voting_service::VotingService::handle_vote(
         &cluster_info,
         &poh_recorder,
         &tower_storage,
         vote_info,
-        Arc::new(connection_cache),
+        Arc::new(NoopVoteTransport),
     );
 
     let mut cursor = Cursor::default();
@@ -4719,24 +4706,12 @@ fn test_replay_stage_refresh_last_vote() {
         .recv_timeout(Duration::from_secs(1))
         .unwrap();
 
-    let connection_cache = if DEFAULT_VOTE_USE_QUIC {
-        ConnectionCache::new_quic_for_tests(
-            "connection_cache_vote_quic",
-            DEFAULT_TPU_CONNECTION_POOL_SIZE,
-        )
-    } else {
-        ConnectionCache::with_udp(
-            "connection_cache_vote_udp",
-            DEFAULT_TPU_CONNECTION_POOL_SIZE,
-        )
-    };
-
     crate::voting_service::VotingService::handle_vote(
         &cluster_info,
         &poh_recorder,
         &tower_storage,
         vote_info,
-        Arc::new(connection_cache),
+        Arc::new(NoopVoteTransport),
     );
 
     let votes = cluster_info.get_votes(&mut cursor);
@@ -4848,24 +4823,12 @@ fn test_replay_stage_refresh_last_vote() {
     let vote_info = voting_receiver
         .recv_timeout(Duration::from_secs(1))
         .unwrap();
-    let connection_cache = if DEFAULT_VOTE_USE_QUIC {
-        ConnectionCache::new_quic_for_tests(
-            "connection_cache_vote_quic",
-            DEFAULT_TPU_CONNECTION_POOL_SIZE,
-        )
-    } else {
-        ConnectionCache::with_udp(
-            "connection_cache_vote_udp",
-            DEFAULT_TPU_CONNECTION_POOL_SIZE,
-        )
-    };
-
     crate::voting_service::VotingService::handle_vote(
         &cluster_info,
         &poh_recorder,
         &tower_storage,
         vote_info,
-        Arc::new(connection_cache),
+        Arc::new(NoopVoteTransport),
     );
 
     assert!(last_vote_refresh_time.last_refresh_time > clone_refresh_time);
@@ -4990,24 +4953,12 @@ fn send_vote_in_new_bank(
     let vote_info = voting_receiver
         .recv_timeout(Duration::from_secs(1))
         .unwrap();
-    let connection_cache = if DEFAULT_VOTE_USE_QUIC {
-        ConnectionCache::new_quic_for_tests(
-            "connection_cache_vote_quic",
-            DEFAULT_TPU_CONNECTION_POOL_SIZE,
-        )
-    } else {
-        ConnectionCache::with_udp(
-            "connection_cache_vote_udp",
-            DEFAULT_TPU_CONNECTION_POOL_SIZE,
-        )
-    };
-
     crate::voting_service::VotingService::handle_vote(
         cluster_info,
         poh_recorder,
         tower_storage,
         vote_info,
-        Arc::new(connection_cache),
+        Arc::new(NoopVoteTransport),
     );
 
     let votes = cluster_info.get_votes(cursor);

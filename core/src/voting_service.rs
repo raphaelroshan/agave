@@ -6,7 +6,7 @@ use {
     crossbeam_channel::Receiver,
     solana_client::connection_cache::ConnectionCache,
     solana_clock::{FORWARD_TRANSACTIONS_TO_LEADER_AT_SLOT_OFFSET, Slot},
-    solana_connection_cache::client_connection::ClientConnection,
+    solana_connection_cache::{client_connection::ClientConnection, connection_cache::Protocol},
     solana_gossip::cluster_info::ClusterInfo,
     solana_measure::measure::Measure,
     solana_poh::poh_recorder::PohRecorder,
@@ -19,6 +19,49 @@ use {
     },
     thiserror::Error,
 };
+
+/// Trait abstracting the transport used to send vote transactions.
+///
+/// This allows production code to use `ConnectionCache` while tests can
+/// substitute a lightweight implementation that avoids standing up a full
+/// QUIC stack.
+pub trait VoteTransport: Send + Sync {
+    /// Returns the protocol used by this transport (e.g. QUIC or UDP).
+    fn protocol(&self) -> Protocol;
+
+    /// Send a serialized vote transaction to the given address.
+    fn send_vote(&self, addr: &SocketAddr, buf: Arc<Vec<u8>>) -> Result<(), TransportError>;
+}
+
+impl VoteTransport for ConnectionCache {
+    fn protocol(&self) -> Protocol {
+        self.protocol()
+    }
+
+    fn send_vote(&self, addr: &SocketAddr, buf: Arc<Vec<u8>>) -> Result<(), TransportError> {
+        let client = self.get_connection(addr);
+        client.send_data_async(buf)
+    }
+}
+
+/// A no-op vote transport for use in tests.
+///
+/// This transport reports the protocol as QUIC and silently drops sent votes,
+/// which is sufficient for tests that only assert on cluster_info vote state
+/// and tower bookkeeping rather than on actual network delivery.
+#[cfg(feature = "dev-context-only-utils")]
+pub struct NoopVoteTransport;
+
+#[cfg(feature = "dev-context-only-utils")]
+impl VoteTransport for NoopVoteTransport {
+    fn protocol(&self) -> Protocol {
+        Protocol::QUIC
+    }
+
+    fn send_vote(&self, _addr: &SocketAddr, _buf: Arc<Vec<u8>>) -> Result<(), TransportError> {
+        Ok(())
+    }
+}
 
 pub enum VoteOp {
     PushVote {
@@ -55,19 +98,14 @@ fn send_vote_transaction(
     cluster_info: &ClusterInfo,
     transaction: &Transaction,
     tpu: Option<SocketAddr>,
-    connection_cache: &Arc<ConnectionCache>,
+    transport: &Arc<dyn VoteTransport>,
 ) -> Result<(), SendVoteError> {
     let tpu = tpu
-        .or_else(|| {
-            cluster_info
-                .my_contact_info()
-                .tpu(connection_cache.protocol())
-        })
+        .or_else(|| cluster_info.my_contact_info().tpu(transport.protocol()))
         .ok_or(SendVoteError::InvalidTpuAddress)?;
     let buf = Arc::new(wincode::serialize(transaction)?);
-    let client = connection_cache.get_connection(&tpu);
 
-    client.send_data_async(buf).map_err(|err| {
+    transport.send_vote(&tpu, buf).map_err(|err| {
         error!("Ran into an error when sending vote: {err:?} to {tpu:?}");
         SendVoteError::from(err)
     })
@@ -83,7 +121,7 @@ impl VotingService {
         cluster_info: Arc<ClusterInfo>,
         poh_recorder: Arc<RwLock<PohRecorder>>,
         tower_storage: Arc<dyn TowerStorage>,
-        connection_cache: Arc<ConnectionCache>,
+        transport: Arc<dyn VoteTransport>,
     ) -> Self {
         let thread_hdl = Builder::new()
             .name("solVoteService".to_string())
@@ -95,7 +133,7 @@ impl VotingService {
                             &poh_recorder,
                             tower_storage.as_ref(),
                             vote_op,
-                            connection_cache.clone(),
+                            transport.clone(),
                         );
                     }
                 }
@@ -109,7 +147,7 @@ impl VotingService {
         poh_recorder: &RwLock<PohRecorder>,
         tower_storage: &dyn TowerStorage,
         vote_op: VoteOp,
-        connection_cache: Arc<ConnectionCache>,
+        transport: Arc<dyn VoteTransport>,
     ) {
         if let VoteOp::PushVote { saved_tower, .. } = &vote_op {
             let mut measure = Measure::start("tower storage save");
@@ -132,7 +170,7 @@ impl VotingService {
             cluster_info,
             poh_recorder,
             UPCOMING_LEADER_FANOUT_SLOTS,
-            connection_cache.protocol(),
+            transport.protocol(),
         );
 
         if !upcoming_leader_sockets.is_empty() {
@@ -141,12 +179,12 @@ impl VotingService {
                     cluster_info,
                     vote_op.tx(),
                     Some(tpu_vote_socket),
-                    &connection_cache,
+                    &transport,
                 );
             }
         } else {
             // Send to our own tpu vote socket if we cannot find a leader to send to
-            let _ = send_vote_transaction(cluster_info, vote_op.tx(), None, &connection_cache);
+            let _ = send_vote_transaction(cluster_info, vote_op.tx(), None, &transport);
         }
 
         match vote_op {
